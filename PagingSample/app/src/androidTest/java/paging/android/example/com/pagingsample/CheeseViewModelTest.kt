@@ -4,6 +4,8 @@ import androidx.paging.AsyncPagingDataDiffer
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import androidx.recyclerview.widget.ListUpdateCallback
+import androidx.room.Room
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -34,9 +36,9 @@ class CheeseViewModelTest {
     @Test
     fun separatorsTest() = runBlockingTest(testDispatcher) {
         val cheeses = listOf(
-            Cheese(0, "Abbaye de Belloc"),
-            Cheese(1, "Brie"),
-            Cheese(2, "Cheddar"),
+            Cheese(name = "Abbaye de Belloc"),
+            Cheese(name = "Brie"),
+            Cheese(name = "Cheddar"),
         )
         val differ = AsyncPagingDataDiffer(
             diffCallback = CheeseAdapter.diffCallback,
@@ -44,7 +46,13 @@ class CheeseViewModelTest {
             mainDispatcher = testDispatcher,
             workerDispatcher = testDispatcher,
         )
-        val cheeseViewModel = CheeseViewModel(CheeseDaoFake(cheeses))
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val db = Room.inMemoryDatabaseBuilder(appContext, CheeseDb::class.java)
+                .allowMainThreadQueries()
+                .build()
+        val cheeseDao = db.cheeseDao()
+
+        val cheeseViewModel = CheeseViewModel(cheeseDao)
 
         // submitData allows differ to receive data from PagingData, but suspends until
         // invalidation, so we must launch this in a separate job.
@@ -57,6 +65,19 @@ class CheeseViewModelTest {
         // Wait for initial load to finish.
         advanceUntilIdle()
 
+        assertThat(differ.snapshot()).isEmpty()
+
+        //add cheeses to the database
+        cheeseDao.insert(cheeses)
+
+        val job2 = launch {
+            cheeseViewModel.allCheeses.collectLatest { pagingData ->
+                differ.submitData(pagingData)
+            }
+        }
+
+        advanceUntilIdle()
+
         assertThat(differ.snapshot()).containsExactly(
             CheeseListItem.Separator('A'),
             CheeseListItem.Item(cheeses[0]),
@@ -66,8 +87,9 @@ class CheeseViewModelTest {
             CheeseListItem.Item(cheeses[2]),
         )
 
-        // runBlockingTest checks for leaking jobs, so we have to cancel the one we started.
+        // runBlockingTest checks for leaking jobs, so we have to cancel the ones we started.
         job.cancel()
+        job2.cancel()
     }
 }
 
